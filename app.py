@@ -328,7 +328,7 @@ if st.session_state.df is not None:
         st.session_state.selected_features = selected_features
         st.success(f"✅ Fitur terpilih: {', '.join(selected_features)}")
 
-        with st.expander("📊 Statistik Fitur Terpilih", expanded=False):
+        with st.expander("📊 Statistik Deskriptif", expanded=False):
             st.dataframe(df[selected_features].describe(), use_container_width=True)
 
 # ========== BAGIAN 3: JUMLAH CLUSTER ==========
@@ -389,7 +389,34 @@ if st.session_state.df is not None and len(st.session_state.selected_features) >
             st.session_state.dbi_score = dbi_score
 
             st.success(f"✅ Clustering berhasil! Davies-Bouldin Index (DBI): {dbi_score:.4f}")
-            st.info("📌 **Interpretasi DBI:** Nilai DBI yang lebih rendah menunjukkan clustering yang lebih baik (cluster lebih terpisah dan lebih kompak).")
+
+            # Interpretasi DBI berdasarkan nilai
+            if dbi_score < 0.5:
+                quality = "**Good clustering quality** ✅"
+                color = "green"
+            elif 0.5 <= dbi_score <= 1.0:
+                quality = "**Fair clustering quality** ⚠️"
+                color = "orange"
+            else:
+                quality = "**Poor clustering quality** ❌"
+                color = "red"
+
+            st.markdown(f"**Kualitas Clustering:** :{color}[{quality}]")
+
+            with st.expander("📊 Interpretasi Davies-Bouldin Index (DBI)", expanded=False):
+                st.markdown("""
+                Nilai DBI yang lebih rendah menunjukkan clustering yang lebih baik (cluster lebih terpisah dan lebih kompak).
+
+                **Panduan Interpretasi DBI:**
+
+                | DBI Value | Clustering Quality |
+                |-----------|-------------------|
+                | Low (e.g., < 0.5) | Good clustering quality |
+                | Moderate (e.g., 0.5-1.0) | Fair clustering quality |
+                | High (e.g., > 1.0) | Poor clustering quality |
+
+                **DBI Anda:** {:.4f} → {}
+                """.format(dbi_score, quality))
 
 # ========== BAGIAN 4: VISUALISASI HASIL ==========
 if st.session_state.df_clustered is not None:
