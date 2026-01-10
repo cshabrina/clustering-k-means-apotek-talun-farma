@@ -414,11 +414,15 @@ if page == "Clustering":
             col1, col2 = st.columns([1, 2])
 
             with col1:
+                # Mapping tingkat penjualan & harga
+                tingkat_mapping = {0: 'Sedang', 1: 'Rendah', 2: 'Tinggi'}
+
                 st.dataframe(
                     pd.DataFrame({
-                        'Cluster': cluster_counts.index,
+                        'Cluster': [f"Cluster {i}" for i in cluster_counts.index],
                         'Jumlah Obat': cluster_counts.values,
-                        'Persentase': [f"{(v/len(df_clustered)*100):.1f}%" for v in cluster_counts.values]
+                        'Persentase': [f"{(v/len(df_clustered)*100):.1f}%" for v in cluster_counts.values],
+                        'Tingkat Penjualan & Harga': [tingkat_mapping.get(i, '-') for i in cluster_counts.index]
                     }),
                     width='stretch'
                 )
