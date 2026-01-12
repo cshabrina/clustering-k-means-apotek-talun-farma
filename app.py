@@ -404,7 +404,7 @@ if page == "Clustering":
         n_clusters = st.session_state.n_clusters
         dbi_score = st.session_state.dbi_score
 
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Distribusi Cluster", "📈 Visualisasi 2D", "🎨 Visualisasi 3D", "📋 Detail Cluster"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Distribusi Cluster", "📈 Visualisasi", "🎨 Visualisasi 3D", "📋 Detail Cluster"])
 
         with tab1:
             st.subheader("Distribusi Data per Cluster")
@@ -465,19 +465,19 @@ if page == "Clustering":
             else:
                 st.warning("⚠️ Pilih fitur yang berbeda untuk sumbu X dan Y!")
 
+        # with tab3:
+        #     st.subheader("Visualisasi 3D Scatter Plot")
+
+        #     if len(selected_features) >= 3:
+        #         with st.spinner("Membuat visualisasi 3D..."):
+        #             fig_3d = create_3d_visualization(df_clustered, selected_features, centroids)
+        #             if fig_3d:
+        #                 st.pyplot(fig_3d)
+        #                 plt.close()
+        #     else:
+        #         st.info("ℹ️ Visualisasi 3D memerlukan minimal 3 fitur. Silakan pilih 3 fitur pada bagian 'Pilih Fitur'.")
+
         with tab3:
-            st.subheader("Visualisasi 3D Scatter Plot")
-
-            if len(selected_features) >= 3:
-                with st.spinner("Membuat visualisasi 3D..."):
-                    fig_3d = create_3d_visualization(df_clustered, selected_features, centroids)
-                    if fig_3d:
-                        st.pyplot(fig_3d)
-                        plt.close()
-            else:
-                st.info("ℹ️ Visualisasi 3D memerlukan minimal 3 fitur. Silakan pilih 3 fitur pada bagian 'Pilih Fitur'.")
-
-        with tab4:
             st.subheader("Detail Informasi per Cluster")
 
             for cluster in sorted(df_clustered['Cluster'].unique()):
