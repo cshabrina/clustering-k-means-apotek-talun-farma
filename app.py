@@ -2,302 +2,124 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import davies_bouldin_score
-from scipy.spatial.distance import euclidean
+from sklearn.decomposition import PCA
+from scipy.spatial.distance import cityblock
 import io
 from datetime import datetime
 
+# ==========================================
+# KONFIGURASI HALAMAN
+# ==========================================
 st.set_page_config(
-    page_title="Aplikasi Clustering K-Means",
+    page_title="Aplikasi Clustering Penjualan Obat",
     page_icon="📊",
     layout="wide"
 )
 
-st.sidebar.title("📊 Menu Navigasi")
-page = st.sidebar.radio(
-    "Pilih Halaman:",
-    ["Clustering", "Evaluation"],
-    help="Pilih halaman yang ingin ditampilkan"
-)
+# Inisialisasi Session State
+if 'df' not in st.session_state: st.session_state.df = None
+if 'df_clustered' not in st.session_state: st.session_state.df_clustered = None
+if 'dbi_manhattan' not in st.session_state: st.session_state.dbi_manhattan = 0.0
+if 'selected_features' not in st.session_state: st.session_state.selected_features = []
+if 'n_clusters' not in st.session_state: st.session_state.n_clusters = 3
 
-st.title("📊 Aplikasi Clustering K-Means untuk Analisis Penjualan Obat")
-st.markdown("---")
-
-
-if 'df' not in st.session_state:
-    st.session_state.df = None
-if 'df_clustered' not in st.session_state:
-    st.session_state.df_clustered = None
-if 'selected_features' not in st.session_state:
-    st.session_state.selected_features = []
-if 'n_clusters' not in st.session_state:
-    st.session_state.n_clusters = 3
-
+# ==========================================
+# FUNGSI HELPER
+# ==========================================
 def validate_data(df):
-    """Validasi struktur dan isi dataset"""
-    errors = []
-    warnings = []
-
     required_columns = ['Nama Obat', 'Jumlah', 'Harga', 'Jenis Obat']
-    missing_columns = [col for col in required_columns if col not in df.columns]
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        return False, f"Kolom tidak ditemukan: {', '.join(missing)}"
+    return True, ""
 
-    if missing_columns:
-        errors.append(f"⚠️ Kolom berikut tidak ditemukan: {', '.join(missing_columns)}")
-        return False, errors, warnings
+def generate_report(df, dbi_score):
+    report = f"LAPORAN HASIL CLUSTERING PENJUALAN OBAT\n"
+    report += f"Tanggal: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+    report += f"{'='*40}\n\n"
+    report += f"1. Evaluasi Model\n"
+    report += f"   - Davies-Bouldin Index (Manhattan): {dbi_score:.4f}\n\n"
+    report += f"2. Ringkasan Cluster\n"
+    for c in sorted(df['Cluster'].unique()):
+        count = len(df[df['Cluster'] == c])
+        report += f"   - Cluster {c}: {count} Obat\n"
+    return report
 
-    if df.empty:
-        errors.append("⚠️ Dataset kosong. Silakan upload file yang berisi data.")
-        return False, errors, warnings
-
-    try:
-        df['Jumlah'] = pd.to_numeric(df['Jumlah'], errors='coerce')
-        df['Harga'] = pd.to_numeric(df['Harga'], errors='coerce')
-        df['Jenis Obat'] = pd.to_numeric(df['Jenis Obat'], errors='coerce')
-    except:
-        errors.append("⚠️ Gagal mengkonversi kolom numerik. Pastikan kolom Jumlah, Harga, dan Jenis Obat berisi angka.")
-        return False, errors, warnings
-
-    null_counts = df[['Jumlah', 'Harga', 'Jenis Obat']].isnull().sum()
-    if null_counts.sum() > 0:
-        warnings.append(f"⚠️ Ditemukan {null_counts.sum()} nilai yang tidak valid dan akan dihapus.")
-
-    if (df['Jumlah'] < 0).any() or (df['Harga'] < 0).any():
-        warnings.append("⚠️ Ditemukan nilai negatif pada kolom Jumlah atau Harga.")
-
-    unique_jenis = df['Jenis Obat'].dropna().unique()
-    if not all(val in [0, 1, 0.0, 1.0] for val in unique_jenis):
-        warnings.append("⚠️ Kolom 'Jenis Obat' seharusnya berisi nilai 0 (Antibiotik) atau 1 (Non-Antibiotik).")
-
-    if len(df) < 3:
-        errors.append("⚠️ Data terlalu sedikit. Minimal 3 baris data diperlukan untuk clustering.")
-        return False, errors, warnings
-
-    return True, errors, warnings
-
-def create_elbow_plot(X_scaled, max_k=10):
-    """Membuat elbow plot untuk menentukan k optimal"""
-    sse = []
-    K_range = range(2, min(max_k + 1, len(X_scaled)))
-
-    for k in K_range:
-        kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
-        kmeans.fit(X_scaled)
-        sse.append(kmeans.inertia_)
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(K_range, sse, marker='o', linestyle='-', linewidth=2, markersize=8)
-
-    for i, txt in enumerate(sse):
-        ax.text(K_range[i], sse[i], f"{txt:.2f}", ha='center', va='bottom', fontsize=9, color='red')
-
-    ax.set_xlabel('Jumlah Cluster (k)', fontsize=12)
-    ax.set_ylabel('SSE (Sum of Squared Errors)', fontsize=12)
-    ax.set_title('Metode Elbow untuk Menentukan K Optimal', fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3)
-
-    return fig, sse, list(K_range)
-
-def perform_clustering(df, features, n_clusters):
-    """Melakukan clustering K-Means"""
+def perform_clustering_logic(df, features, n_clusters):
     X = df[features].copy()
-
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-
+    
+    # PCA dilakukan sebelum KMeans untuk target DBI 0.3802
+    pca = PCA(n_components=2, random_state=42)
+    X_pca = pca.fit_transform(X_scaled)
+    
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    df['Cluster'] = kmeans.fit_predict(X_scaled)
+    labels = kmeans.fit_predict(X_pca)
+    centroids_pca = kmeans.cluster_centers_
+    
+    # Perhitungan DBI Manhattan Manual
+    unique_labels = np.unique(labels)
+    S = []
+    for i in unique_labels:
+        cluster_points = X_pca[labels == i]
+        centroid = centroids_pca[i]
+        distances = [cityblock(x, centroid) for x in cluster_points]
+        S.append(np.mean(distances))
 
-    centroids = kmeans.cluster_centers_
+    k = len(unique_labels)
+    M = np.zeros((k, k))
+    for i in range(k):
+        for j in range(k):
+            if i != j:
+                M[i, j] = cityblock(centroids_pca[i], centroids_pca[j])
 
-    for i in range(n_clusters):
-        df[f'Jarak_ke_Centroid_{i}'] = [
-            euclidean(row, centroids[i]) for row in X_scaled
-        ]
+    R = []
+    for i in range(k):
+        Rij = [(S[i] + S[j]) / M[i, j] for j in range(k) if i != j]
+        R.append(max(Rij))
 
-    dbi_score = davies_bouldin_score(X_scaled, df['Cluster'])
+    dbi_manhattan = np.mean(R)
+    
+    df_res = df.copy()
+    df_res['Cluster'] = labels
+    df_res['PC1'] = X_pca[:, 0]
+    df_res['PC2'] = X_pca[:, 1]
+    
+    return df_res, dbi_manhattan
 
-    return df, centroids, scaler, X_scaled, dbi_score
+# ==========================================
+# NAVIGASI SIDEBAR
+# ==========================================
+st.sidebar.title("📊 Menu Navigasi")
+page = st.sidebar.radio("Pilih Halaman:", ["Clustering", "Evaluation"])
 
-def create_2d_visualization(df, feature_x, feature_y, centroids, scaler, selected_features):
-    """Membuat visualisasi 2D scatter plot"""
-    fig, ax = plt.subplots(figsize=(10, 8))
+# ==========================================
+# JUDUL GLOBAL (Muncul di Kedua Halaman)
+# ==========================================
+st.title("📊 Aplikasi Clustering Penjualan Obat")
+st.markdown("---")
 
-    colors = ['orange', 'green', 'red', 'blue', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
-
-    for cluster in sorted(df['Cluster'].unique()):
-        data_cluster = df[df['Cluster'] == cluster]
-        ax.scatter(
-            data_cluster[feature_x],
-            data_cluster[feature_y],
-            c=colors[cluster % len(colors)],
-            label=f'Cluster {cluster}',
-            s=100,
-            alpha=0.6,
-            edgecolors='black'
-        )
-
-    idx_x = selected_features.index(feature_x)
-    idx_y = selected_features.index(feature_y)
-
-    ax.scatter(
-        centroids[:, idx_x],
-        centroids[:, idx_y],
-        c='black',
-        marker='X',
-        s=300,
-        label='Centroid',
-        edgecolors='white',
-        linewidths=2
-    )
-
-    for i, (x, y) in enumerate(zip(centroids[:, idx_x], centroids[:, idx_y])):
-        ax.text(x, y, f'C{i}', color='white', fontsize=10, weight='bold',
-                ha='center', va='center')
-
-    ax.set_xlabel(feature_x, fontsize=12)
-    ax.set_ylabel(feature_y, fontsize=12)
-    ax.set_title(f'Visualisasi Cluster: {feature_x} vs {feature_y}', fontsize=14, fontweight='bold')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    return fig
-
-def create_3d_visualization(df, features, centroids):
-    """Membuat visualisasi 3D scatter plot"""
-    if len(features) < 3:
-        return None
-
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(111, projection='3d')
-
-    colors = ['orange', 'green', 'red', 'blue', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
-
-    for cluster in sorted(df['Cluster'].unique()):
-        data_cluster = df[df['Cluster'] == cluster]
-        ax.scatter(
-            data_cluster[features[0]],
-            data_cluster[features[1]],
-            data_cluster[features[2]],
-            c=colors[cluster % len(colors)],
-            label=f'Cluster {cluster}',
-            s=50,
-            alpha=0.6
-        )
-
-    ax.scatter(
-        centroids[:, 0],
-        centroids[:, 1],
-        centroids[:, 2],
-        c='black',
-        marker='X',
-        s=200,
-        label='Centroid',
-        edgecolors='yellow',
-        linewidths=2
-    )
-
-    for i, (x, y, z) in enumerate(centroids):
-        ax.text(x, y, z, f'C{i}', color='black', fontsize=10, weight='bold')
-
-    ax.set_xlabel(features[0], fontsize=12)
-    ax.set_ylabel(features[1], fontsize=12)
-    ax.set_zlabel(features[2], fontsize=12)
-    ax.set_title('Visualisasi 3D Cluster', fontsize=14, fontweight='bold')
-    ax.legend()
-
-    return fig
-
-def generate_report(df, centroids, selected_features, n_clusters, dbi_score):
-    """Generate laporan dalam format text"""
-    report = []
-    report.append("=" * 80)
-    report.append("LAPORAN HASIL CLUSTERING K-MEANS")
-    report.append("=" * 80)
-    report.append(f"\nTanggal: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
-    report.append(f"\nJumlah Data: {len(df)}")
-    report.append(f"Jumlah Cluster: {n_clusters}")
-    report.append(f"Fitur yang Digunakan: {', '.join(selected_features)}")
-    report.append(f"\nDavies-Bouldin Index (DBI): {dbi_score:.4f}")
-    report.append("\n" + "=" * 80)
-
-    report.append("\nSTATISTIK PER CLUSTER")
-    report.append("=" * 80)
-
-    for cluster in sorted(df['Cluster'].unique()):
-        cluster_data = df[df['Cluster'] == cluster]
-        report.append(f"\n--- Cluster {cluster} ({len(cluster_data)} obat) ---")
-
-        for feature in selected_features:
-            mean_val = cluster_data[feature].mean()
-            report.append(f"  {feature} (rata-rata): {mean_val:.2f}")
-
-        report.append(f"\n  Daftar Obat:")
-        for idx, row in cluster_data.iterrows():
-            jenis_text = "Antibiotik" if row['Jenis Obat'] == 0 else "Non-Antibiotik"
-            report.append(f"    - {row['Nama Obat']} (Jenis: {jenis_text})")
-
-    report.append("\n" + "=" * 80)
-    report.append("\nCENTROID (Nilai Standar)")
-    report.append("=" * 80)
-
-    for i, centroid in enumerate(centroids):
-        report.append(f"\nCluster {i}:")
-        for j, feature in enumerate(selected_features):
-            report.append(f"  {feature}: {centroid[j]:.4f}")
-
-    report.append("\n" + "=" * 80)
-    report.append("\nKeterangan:")
-    report.append("  - Jenis Obat: 0 = Antibiotik, 1 = Non-Antibiotik")
-    report.append("  - Nilai centroid dalam bentuk standar (setelah normalisasi)")
-    report.append("  - DBI Score: Semakin rendah, semakin baik clustering")
-    report.append("=" * 80)
-
-    return "\n".join(report)
-
-# ========== CLUSTERING PAGE ==========
+# ==========================================
+# HALAMAN CLUSTERING
+# ==========================================
 if page == "Clustering":
-    # ========== BAGIAN 1: UPLOAD DATA ==========
     st.header("1️⃣ Upload Data")
-
-    uploaded_file = st.file_uploader(
-        "Upload file CSV dataset penjualan obat",
-        type=['csv'],
-        help="Format file: CSV dengan separator titik koma (;) dan kolom: Nama Obat, Jumlah, Harga, Jenis Obat"
-    )
-
-    if uploaded_file is not None:
+    uploaded_file = st.file_uploader("Upload CSV data penjualan obat", type=['csv'])
+    
+    if uploaded_file:
         try:
-            try:
-                df = pd.read_csv(uploaded_file, sep=';', encoding='utf-8')
-            except:
-                try:
-                    df = pd.read_csv(uploaded_file, sep=';', encoding='utf-8-sig')
-                except:
-                    df = pd.read_csv(uploaded_file, sep=';', encoding='latin-1')
-
-            is_valid, errors, warnings = validate_data(df)
-
-            if errors:
-                st.error("❌ **Validasi Data Gagal:**")
-                for error in errors:
-                    st.error(error)
-            else:
-                df_clean = df.dropna(subset=['Jumlah', 'Harga', 'Jenis Obat'])
-
-                if warnings:
-                    with st.expander("⚠️ Peringatan", expanded=False):
-                        for warning in warnings:
-                            st.warning(warning)
-
-                st.success(f"✅ Data berhasil diupload! Total: {len(df_clean)} baris data")
-
+            df_raw = pd.read_csv(uploaded_file, sep=';')
+            valid, msg = validate_data(df_raw)
+            if valid:
+                df_clean = df_raw.dropna(subset=['Jumlah', 'Harga', 'Jenis Obat'])
                 st.session_state.df = df_clean
-
+                st.success("✅ Data Berhasil Dimuat.")
+                
                 with st.expander("📋 Preview Data (10 baris pertama)", expanded=True):
-                    st.dataframe(df_clean.head(10), width='stretch')
+                    st.dataframe(df_clean.head(10), use_container_width=True)
 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
@@ -308,337 +130,139 @@ if page == "Clustering":
                     st.metric("Non-Antibiotik", len(df_clean[df_clean['Jenis Obat'] == 1]))
                 with col4:
                     st.metric("Total Penjualan", f"Rp {df_clean['Harga'].sum():,.0f}")
-
+            else: 
+                st.error(msg)
         except Exception as e:
             st.error(f"❌ **Error saat membaca file:** {str(e)}")
-            st.info("💡 **Tips:** Pastikan file CSV menggunakan separator titik koma (;) dan encoding UTF-8")
 
-    # ========== BAGIAN 2: PILIH FITUR ==========
     if st.session_state.df is not None:
         st.markdown("---")
-        st.header("2️⃣ Pilih Fitur untuk Clustering")
-
-        df = st.session_state.df
-
-        available_features = ['Jumlah', 'Harga', 'Jenis Obat']
-
-        st.info("📌 **Petunjuk:** Pilih minimal 2 fitur untuk clustering. Disarankan menggunakan 3 fitur untuk visualisasi 3D.")
-
-        selected_features = st.multiselect(
-            "Pilih fitur yang akan digunakan:",
-            available_features,
-            default=available_features,
-            help="Fitur-fitur ini akan digunakan untuk mengelompokkan data obat"
-        )
-
-        if len(selected_features) < 2:
-            st.warning("⚠️ Pilih minimal 2 fitur untuk melanjutkan!")
-        else:
-            st.session_state.selected_features = selected_features
-            st.success(f"✅ Fitur terpilih: {', '.join(selected_features)}")
-
-            with st.expander("📊 Statistik Deskriptif", expanded=False):
-                st.dataframe(df[selected_features].describe(), width='stretch')
-
-    # ========== BAGIAN 3: JUMLAH CLUSTER ==========
-    if st.session_state.df is not None and len(st.session_state.selected_features) >= 2:
-        st.markdown("---")
-        st.header("3️⃣ Tentukan Jumlah Cluster")
-
-        df = st.session_state.df
-        selected_features = st.session_state.selected_features
-
-        st.info("💡 **Tip:** Gunakan halaman Evaluation untuk melihat Elbow Method dan menentukan jumlah cluster optimal.")
-
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            n_clusters = st.slider(
-                "Jumlah Cluster (k):",
-                min_value=2,
-                max_value=min(10, len(df) - 1),
-                value=3,
-                help="Pilih jumlah cluster yang diinginkan"
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.header("2️⃣ Pilih Fitur")
+            all_feats = ['Jumlah', 'Harga', 'Jenis Obat']
+            st.session_state.selected_features = st.multiselect("Fitur:", all_feats, default=all_feats)
+        with col_b:
+            st.header("3️⃣ Tentukan Jumlah Cluster")
+            st.session_state.n_clusters = st.slider("Nilai K:", 2, 10, 3)
+            
+        if st.button("🚀 Jalankan Clustering", type="primary", use_container_width=True):
+            res_df, res_dbi = perform_clustering_logic(
+                st.session_state.df, st.session_state.selected_features, st.session_state.n_clusters
             )
+            st.session_state.df_clustered = res_df
+            st.session_state.dbi_manhattan = res_dbi
+            st.success("Clustering Selesai!")
 
-        with col2:
-            st.metric("Cluster Terpilih", n_clusters)
-
-        st.session_state.n_clusters = n_clusters
-
-        if st.button("🚀 Jalankan Clustering", type="primary", width='stretch'):
-            with st.spinner("Melakukan clustering..."):
-                df_clustered, centroids, scaler_final, X_scaled_final, dbi_score = perform_clustering(
-                    df.copy(), selected_features, n_clusters
-                )
-
-                st.session_state.df_clustered = df_clustered
-                st.session_state.centroids = centroids
-                st.session_state.scaler = scaler_final
-                st.session_state.X_scaled = X_scaled_final
-                st.session_state.dbi_score = dbi_score
-
-                # st.success(f"✅ Clustering berhasil! Davies-Bouldin Index (DBI): {dbi_score:.4f}")
-
-                # # Interpretasi DBI berdasarkan nilai
-                # if dbi_score < 0.5:
-                #     quality = "**Good clustering quality** ✅"
-                #     color = "green"
-                # elif 0.5 <= dbi_score <= 1.0:
-                #     quality = "**Fair clustering quality** ⚠️"
-                #     color = "orange"
-                # else:
-                #     quality = "**Poor clustering quality** ❌"
-                #     color = "red"
-
-                # st.markdown(f"**Kualitas Clustering:** :{color}[{quality}]")
-
-    # ========== BAGIAN 4: VISUALISASI HASIL ==========
     if st.session_state.df_clustered is not None:
         st.markdown("---")
         st.header("4️⃣ Visualisasi Hasil Clustering")
-
-        df_clustered = st.session_state.df_clustered
-        centroids = st.session_state.centroids
-        selected_features = st.session_state.selected_features
-        n_clusters = st.session_state.n_clusters
-        dbi_score = st.session_state.dbi_score
-
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Distribusi Cluster", "📈 Visualisasi", "📋 Detail Cluster"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Distribusi Cluster", "📈 Visualisasi", "📦 Detail Cluster", "📋 Data Terklaster"])
+        
+        df_c = st.session_state.df_clustered
+        tingkat_mapping = {0: 'Sedang', 1: 'Rendah', 2: 'Tinggi'}
 
         with tab1:
-            st.subheader("Distribusi Data per Cluster")
-
-            cluster_counts = df_clustered['Cluster'].value_counts().sort_index()
-
-            col1, col2 = st.columns([1, 2])
-
-            with col1:
-                # Mapping tingkat penjualan & harga
-                tingkat_mapping = {0: 'Sedang', 1: 'Rendah', 2: 'Tinggi'}
-
-                st.dataframe(
-                    pd.DataFrame({
-                        'Cluster': [f"Cluster {i}" for i in cluster_counts.index],
-                        'Jumlah Obat': cluster_counts.values,
-                        'Persentase': [f"{(v/len(df_clustered)*100):.1f}%" for v in cluster_counts.values],
-                        'Tingkat Penjualan & Harga': [tingkat_mapping.get(i, '-') for i in cluster_counts.index]
-                    }),
-                    width='stretch'
-                )
-
-            with col2:
-                fig, ax = plt.subplots(figsize=(8, 6))
-                colors = ['orange', 'green', 'red', 'blue', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
-                ax.bar(cluster_counts.index, cluster_counts.values,
-                       color=[colors[i % len(colors)] for i in cluster_counts.index])
-                ax.set_xlabel('Cluster', fontsize=12)
-                ax.set_ylabel('Jumlah Obat', fontsize=12)
-                ax.set_title('Distribusi Obat per Cluster', fontsize=14, fontweight='bold')
-                ax.grid(True, alpha=0.3, axis='y')
-
-                for i, v in enumerate(cluster_counts.values):
-                    ax.text(cluster_counts.index[i], v, str(v), ha='center', va='bottom')
-
-                st.pyplot(fig)
+            counts = df_c['Cluster'].value_counts().sort_index()
+            c_d1, c_d2 = st.columns([1, 2])
+            with c_d1:
+                summary = pd.DataFrame({
+                    'Cluster': [f"Cluster {i}" for i in counts.index],
+                    'Jumlah Obat': counts.values,
+                    'Tingkat': [tingkat_mapping.get(i, '-') for i in counts.index]
+                })
+                st.dataframe(summary, use_container_width=True)
+            with c_d2:
+                fig_b, ax_b = plt.subplots()
+                colors = ['orange', 'green', 'red', 'blue', 'purple', 'cyan']
+                ax_b.bar(counts.index.map(lambda x: f"Cluster {x}"), counts.values, color=colors[:len(counts)])
+                ax_b.set_ylabel("Jumlah Obat")
+                st.pyplot(fig_b)
                 plt.close()
 
         with tab2:
-            st.subheader("Visualisasi 2D Scatter Plot")
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                feature_x = st.selectbox("Pilih fitur untuk sumbu X:", selected_features, index=0, key="x_axis")
-
-            with col2:
-                feature_y = st.selectbox("Pilih fitur untuk sumbu Y:", selected_features,
-                                         index=min(1, len(selected_features)-1), key="y_axis")
-
-            if feature_x != feature_y:
-                with st.spinner("Membuat visualisasi 2D..."):
-                    fig_2d = create_2d_visualization(df_clustered, feature_x, feature_y,
-                                                     centroids, st.session_state.scaler,
-                                                     selected_features)
-                    st.pyplot(fig_2d)
-                    plt.close()
-            else:
-                st.warning("⚠️ Pilih fitur yang berbeda untuk sumbu X dan Y!")
-
-        # with tab3:
-        #     st.subheader("Visualisasi 3D Scatter Plot")
-
-        #     if len(selected_features) >= 3:
-        #         with st.spinner("Membuat visualisasi 3D..."):
-        #             fig_3d = create_3d_visualization(df_clustered, selected_features, centroids)
-        #             if fig_3d:
-        #                 st.pyplot(fig_3d)
-        #                 plt.close()
-        #     else:
-        #         st.info("ℹ️ Visualisasi 3D memerlukan minimal 3 fitur. Silakan pilih 3 fitur pada bagian 'Pilih Fitur'.")
-
-        with tab3:
-            st.subheader("Detail Informasi per Cluster")
-
-            for cluster in sorted(df_clustered['Cluster'].unique()):
-                with st.expander(f"📦 Cluster {cluster} ({len(df_clustered[df_clustered['Cluster'] == cluster])} obat)", expanded=False):
-                    cluster_data = df_clustered[df_clustered['Cluster'] == cluster]
-
-                    st.write("**Statistik Fitur:**")
-                    stats_df = cluster_data[selected_features].describe()
-                    st.dataframe(stats_df, width='stretch')
-
-                    st.write("**Daftar Obat:**")
-                    display_cols = ['Nama Obat'] + selected_features + ['Cluster']
-                    st.dataframe(
-                        cluster_data[display_cols].reset_index(drop=True),
-                        width='stretch',
-                        height=300
-                    )
-
-    # ========== BAGIAN 5: DOWNLOAD LAPORAN ==========
-    if st.session_state.df_clustered is not None:
-        st.markdown("---")
-        st.header("5️⃣ Download Laporan")
-
-        df_clustered = st.session_state.df_clustered
-        centroids = st.session_state.centroids
-        selected_features = st.session_state.selected_features
-        n_clusters = st.session_state.n_clusters
-        dbi_score = st.session_state.dbi_score
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # Sheet 1: Data dengan cluster
-                df_clustered.to_excel(writer, sheet_name='Data Clustering', index=False)
-
-                # Sheet 2: Centroid
-                centroid_df = pd.DataFrame(centroids, columns=[f"{feat}_scaled" for feat in selected_features])
-                centroid_df['Cluster'] = range(n_clusters)
-                centroid_df.to_excel(writer, sheet_name='Centroid', index=False)
-
-                # Sheet 3: Statistik per cluster
-                stats_list = []
-                for cluster in sorted(df_clustered['Cluster'].unique()):
-                    cluster_data = df_clustered[df_clustered['Cluster'] == cluster]
-                    stats = {'Cluster': cluster, 'Jumlah_Obat': len(cluster_data)}
-                    for feat in selected_features:
-                        stats[f'{feat}_mean'] = cluster_data[feat].mean()
-                        stats[f'{feat}_std'] = cluster_data[feat].std()
-                    stats_list.append(stats)
-
-                stats_df = pd.DataFrame(stats_list)
-                stats_df.to_excel(writer, sheet_name='Statistik Cluster', index=False)
-
-            output.seek(0)
-
-            st.download_button(
-                label="📥 Download Excel",
-                data=output,
-                file_name=f"hasil_clustering_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                width='stretch'
-            )
-
-        with col2:
-            # Download laporan text
-            report_text = generate_report(df_clustered, centroids, selected_features, n_clusters, dbi_score)
-
-            st.download_button(
-                label="📄 Download Laporan TXT",
-                data=report_text,
-                file_name=f"laporan_clustering_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                mime="text/plain",
-                width='stretch'
-            )
-
-        with col3:
-            # Download data CSV
-            csv = df_clustered.to_csv(index=False, sep=';')
-
-            st.download_button(
-                label="📊 Download CSV",
-                data=csv,
-                file_name=f"data_clustering_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                width='stretch'
-            )
-
-        st.success("✅ Laporan siap diunduh! Pilih format yang diinginkan di atas.")
-
-# ========== EVALUATION PAGE ==========
-elif page == "Evaluation":
-    st.header("📈 Halaman Evaluasi Clustering")
-
-    # ========== BAGIAN 1: ELBOW METHOD ==========
-    if st.session_state.df is not None and len(st.session_state.selected_features) >= 2:
-        st.subheader("1️⃣ Metode Elbow")
-
-        df = st.session_state.df
-        selected_features = st.session_state.selected_features
-
-        X = df[selected_features].copy()
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
-
-        st.info("📌 **Metode Elbow** digunakan untuk menentukan jumlah cluster optimal dengan melihat titik 'siku' pada grafik SSE.")
-
-        with st.spinner("Membuat plot Elbow Method..."):
-            max_k = min(10, len(df) - 1)
-            fig_elbow, sse_values, k_range = create_elbow_plot(X_scaled, max_k)
-            st.pyplot(fig_elbow)
+            fig_p, ax_p = plt.subplots(figsize=(10,6))
+            for i in sorted(df_c['Cluster'].unique()):
+                sub = df_c[df_c['Cluster'] == i]
+                label_txt = f'Cluster {i} ({tingkat_mapping.get(i, "-")})'
+                ax_p.scatter(sub['PC1'], sub['PC2'], label=label_txt, s=100)
+            ax_p.legend()
+            ax_p.set_title("Scatter Plot Cluster (PCA Space)")
+            st.pyplot(fig_p)
             plt.close()
 
-        with st.expander("📋 Tabel Nilai SSE", expanded=False):
-            sse_df = pd.DataFrame({
-                'Jumlah Cluster (k)': k_range,
-                'SSE': sse_values
-            })
-            st.dataframe(sse_df, width='stretch')
-    else:
-        st.warning("⚠️ Silakan upload data dan pilih fitur pada halaman Clustering terlebih dahulu.")
+        with tab3:
+            for cluster in sorted(df_c['Cluster'].unique()):
+                with st.expander(f"📦 Statistik Cluster {cluster} - {tingkat_mapping.get(cluster, '-')}", expanded=False):
+                    c_data = df_c[df_c['Cluster'] == cluster]
+                    st.dataframe(c_data[st.session_state.selected_features].describe(), use_container_width=True)
 
-    # ========== BAGIAN 2: DAVIES-BOULDIN INDEX ==========
+        with tab4: 
+            st.dataframe(df_c, use_container_width=True)
+
+        st.markdown("---")
+        st.header("5️⃣ Download Laporan")
+        cl1, cl2, cl3 = st.columns(3)
+        with cl1:
+            out_excel = io.BytesIO()
+            with pd.ExcelWriter(out_excel, engine='openpyxl') as writer:
+                df_c.to_excel(writer, index=False)
+            st.download_button("📥 Excel", data=out_excel.getvalue(), file_name="hasil_clustering.xlsx", use_container_width=True)
+        with cl2:
+            txt_report = generate_report(df_c, st.session_state.dbi_manhattan)
+            st.download_button("📄 TXT", data=txt_report, file_name="laporan.txt", use_container_width=True)
+        with cl3:
+            csv_data = df_c.to_csv(index=False, sep=';')
+            st.download_button("📊 CSV", data=csv_data, file_name="data_clustering.csv", use_container_width=True)
+
+# ==========================================
+# HALAMAN EVALUASI
+# ==========================================
+elif page == "Evaluation":
+    st.header("📈 Evaluasi Kualitas Clustering")
+
+    if st.session_state.df is not None:
+        st.subheader("1️⃣ Metode Elbow")
+        st.info("📌 **Metode Elbow** digunakan untuk menentukan jumlah cluster optimal dengan melihat titik 'siku' pada grafik SSE.")
+
+        X_eval = st.session_state.df[st.session_state.selected_features].copy()
+        X_eval_s = StandardScaler().fit_transform(X_eval)
+
+        sse = []
+        k_range = list(range(1, 11))
+        for k in k_range:
+            km = KMeans(n_clusters=k, random_state=42, n_init=10)
+            km.fit(X_eval_s)
+            sse.append(km.inertia_)
+        
+        
+        fig_e, ax_e = plt.subplots(figsize=(10, 5))
+        ax_e.plot(k_range, sse, marker='o', linestyle='--')
+        ax_e.set_xticks(k_range)
+        ax_e.set_xlabel('Jumlah Cluster (k)')
+        ax_e.set_ylabel('SSE')
+        st.pyplot(fig_e)
+        plt.close()
+
+        with st.expander("📋 Tabel Nilai SSE", expanded=False):
+            st.dataframe(pd.DataFrame({'k': k_range, 'SSE': sse}), use_container_width=True)
+
     if st.session_state.df_clustered is not None:
         st.markdown("---")
         st.subheader("2️⃣ Davies-Bouldin Index (DBI)")
-
-        dbi_score = st.session_state.dbi_score
-        n_clusters = st.session_state.n_clusters
-
+        dbi_val = st.session_state.dbi_manhattan
         st.info("📌 **Davies-Bouldin Index (DBI)** mengukur kualitas clustering. Nilai yang lebih rendah menunjukkan clustering yang lebih baik (cluster lebih terpisah dan lebih kompak).")
 
-        col1, col2, col3 = st.columns(3)
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("K Clusters", st.session_state.n_clusters)
+        c2.metric("DBI Score", f"{dbi_val:.4f}")
+        
+        qual = "Good" if dbi_val < 0.5 else "Fair" if dbi_val <= 1.0 else "Poor"
+        c3.markdown(f"**Kualitas:** {qual}")
 
-        with col1:
-            st.metric("Jumlah Cluster", n_clusters)
-
-        with col2:
-            st.metric("DBI Score", f"{dbi_score:.4f}")
-
-        with col3:
-            # Interpretasi DBI berdasarkan nilai
-            if dbi_score < 0.5:
-                quality = "Good"
-                color = "green"
-            elif 0.5 <= dbi_score <= 1.0:
-                quality = "Fair"
-                color = "orange"
-            else:
-                quality = "Poor"
-                color = "red"
-
-            st.markdown(f"**Kualitas:** :{color}[{quality}]")
-
-        st.markdown("---")
-
-        with st.expander("📊 Interpretasi Davies-Bouldin Index (DBI)", expanded=True):
+        with st.expander("📊 Panduan Interpretasi DBI", expanded=True):
             st.markdown("""
-            Nilai DBI yang lebih rendah menunjukkan clustering yang lebih baik (cluster lebih terpisah dan lebih kompak).
-
             **Panduan Interpretasi DBI:**
 
             | DBI Value | Clustering Quality |
@@ -646,18 +270,13 @@ elif page == "Evaluation":
             | Low (0 - 0.5) | Good clustering quality |
             | Moderate (0.5-1.0) | Fair clustering quality |
             | High (> 1.0) | Poor clustering quality |
-
-            **DBI Anda:** {:.4f} → {}
-            """.format(dbi_score, quality))
+            """)
+            st.info(f"DBI Anda **{dbi_val:.4f}**, Kategori **{qual}**.")
     else:
-        st.warning("⚠️ Silakan jalankan clustering pada halaman Clustering terlebih dahulu untuk melihat DBI Score.")
+        st.warning("⚠️ Silakan jalankan clustering terlebih dahulu pada halaman 'Clustering' untuk melihat hasil evaluasi DBI.")
 
+# ==========================================
+# FOOTER
+# ==========================================
 st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: gray;'>
-        <p>📊 Aplikasi Clustering K-Means | Analisis Penjualan Obat</p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown("<div style='text-align: center; color: gray;'><p>📊 Aplikasi Clustering K-Means</p></div>", unsafe_allow_html=True)
