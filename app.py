@@ -404,7 +404,7 @@ if page == "Clustering":
         n_clusters = st.session_state.n_clusters
         dbi_score = st.session_state.dbi_score
 
-        tab1, tab2, tab3, tab4 = st.tabs(["📊 Distribusi Cluster", "📈 Visualisasi", "🎨 Visualisasi 3D", "📋 Detail Cluster"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📊 Distribusi Cluster", "📈 Visualisasi", "📋 Detail Cluster"])
 
         with tab1:
             st.subheader("Distribusi Data per Cluster")
