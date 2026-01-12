@@ -187,7 +187,7 @@ if page == "Clustering":
                 label_txt = f'Cluster {i} ({tingkat_mapping.get(i, "-")})'
                 ax_p.scatter(sub['PC1'], sub['PC2'], label=label_txt, s=100)
             ax_p.legend()
-            ax_p.set_title("Scatter Plot Cluster (PCA Space)")
+            ax_p.set_title("Visualisasi Hasil Cluster")
             st.pyplot(fig_p)
             plt.close()
 
