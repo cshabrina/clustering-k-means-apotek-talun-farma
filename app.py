@@ -378,20 +378,20 @@ if page == "Clustering":
                 st.session_state.X_scaled = X_scaled_final
                 st.session_state.dbi_score = dbi_score
 
-                st.success(f"✅ Clustering berhasil! Davies-Bouldin Index (DBI): {dbi_score:.4f}")
+                # st.success(f"✅ Clustering berhasil! Davies-Bouldin Index (DBI): {dbi_score:.4f}")
 
-                # Interpretasi DBI berdasarkan nilai
-                if dbi_score < 0.5:
-                    quality = "**Good clustering quality** ✅"
-                    color = "green"
-                elif 0.5 <= dbi_score <= 1.0:
-                    quality = "**Fair clustering quality** ⚠️"
-                    color = "orange"
-                else:
-                    quality = "**Poor clustering quality** ❌"
-                    color = "red"
+                # # Interpretasi DBI berdasarkan nilai
+                # if dbi_score < 0.5:
+                #     quality = "**Good clustering quality** ✅"
+                #     color = "green"
+                # elif 0.5 <= dbi_score <= 1.0:
+                #     quality = "**Fair clustering quality** ⚠️"
+                #     color = "orange"
+                # else:
+                #     quality = "**Poor clustering quality** ❌"
+                #     color = "red"
 
-                st.markdown(f"**Kualitas Clustering:** :{color}[{quality}]")
+                # st.markdown(f"**Kualitas Clustering:** :{color}[{quality}]")
 
     # ========== BAGIAN 4: VISUALISASI HASIL ==========
     if st.session_state.df_clustered is not None:
